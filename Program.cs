@@ -40,11 +40,12 @@ namespace DesktopElementInspector
                             Thread.Sleep(5000);
                             Console.WriteLine("==================waiting is done===================");
                             // result = topWindowScraper.Scrape();
-                            var DscrapedElements = topWindowScraper.Scrape();
+                            var DscrapedElements = topWindowScraper.ScrapeForegroundWindow();
                             // Use string.Join and a LINQ Select to format each element's data.
                             var Doutput = string.Join(",\n  ", DscrapedElements.Select(dto =>
-                                $"{{ DbId: \"{dto.DbId}\", Name: \"{dto.Name}\", ControlType: \"{dto.ControlType}\" ,Boundings : \"{dto.BoundingRectangle}\"}}"
+                                $"{{ DbId: \"{dto.DbId}\", Name: \"{dto.Name}\", ControlType: \"{dto.ControlType}}}"
                             ));
+                            // \" ,Boundings : \"{dto.BoundingRectangle}\"
                             // Print the final combined string.
                             Console.WriteLine("[\n  " + Doutput + "\n]");
                             Console.WriteLine("=======================================================================");
@@ -63,16 +64,12 @@ namespace DesktopElementInspector
                             break;
                         case "3":
                             // To run the taskbar test, just make this single method call:
-                            Thread.Sleep(5000);
-
                             TaskbarTestExecutor.RunInteractiveTest();
 
                             Console.WriteLine("The taskbar test has completed. Resuming main application flow.");
                             break;
                         case "4":
                             // To run the taskbar test, just make this single method call:
-                            Thread.Sleep(5000);
-
                             DesktopTestExecutor.RunRecursiveTest();
 
                             Console.WriteLine("The taskbar test has completed. Resuming main application flow.");
