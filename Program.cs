@@ -39,15 +39,21 @@ namespace DesktopElementInspector
                             Console.WriteLine("=======================================================================");
                             Thread.Sleep(5000);
                             Console.WriteLine("==================waiting is done===================");
+
                             // result = topWindowScraper.Scrape();
-                            var DscrapedElements = topWindowScraper.ScrapeForegroundWindow();
+                            var DscrapedElements = topWindowScraper.AnalyzeSemantically();
+                            // var res = topWindowScraper.Scrape();
+                            // res.ForEach(item => Console.WriteLine(item));
+
                             // Use string.Join and a LINQ Select to format each element's data.
-                            var Doutput = string.Join(",\n  ", DscrapedElements.Select(dto =>
-                                $"{{ DbId: \"{dto.DbId}\", Name: \"{dto.Name}\", ControlType: \"{dto.ControlType}}}"
-                            ));
-                            // \" ,Boundings : \"{dto.BoundingRectangle}\"
-                            // Print the final combined string.
-                            Console.WriteLine("[\n  " + Doutput + "\n]");
+                            // topWindowScraper.PrintTree(DscrapedElements);
+                            topWindowScraper.PrintSemanticView(DscrapedElements);
+                            // var Doutput = string.Join(",\n  ", DscrapedElements.Select(dto =>
+                            //     $"{{ Parent name: \"{dto.ParentName}\" , DbId: \"{dto.DbId}\", Name: \"{dto.Name}\",classname: \"{dto.ClassName}\", ControlType: \"{dto.ControlType}\", }}"
+                            // ));
+                            //\" ,Boundings : \"{dto.BoundingRectangle}\"  
+                            //Print the final combined string.
+                            // Console.WriteLine("[\n  " + Doutput + "\n]");
                             Console.WriteLine("=======================================================================");
                             break;
                         case "2":
@@ -69,10 +75,12 @@ namespace DesktopElementInspector
                             Console.WriteLine("The taskbar test has completed. Resuming main application flow.");
                             break;
                         case "4":
-                            // To run the taskbar test, just make this single method call:
-                            DesktopTestExecutor.RunRecursiveTest();
 
-                            Console.WriteLine("The taskbar test has completed. Resuming main application flow.");
+
+                            //To run the taskbar test, just make this single method call:
+                            // DesktopTestExecutor.RunRecursiveTest();
+
+                            Console.WriteLine("\nProgram finished.");
                             break;
                         default:
                             Console.WriteLine("Invalid option.");
