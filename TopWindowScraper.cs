@@ -1,16 +1,17 @@
-    using System;
-    using System.Collections.Generic;
-    using System.Diagnostics;
-    using System.Linq;
-    using System.Runtime.InteropServices;
-    using FlaUI.Core;
-    using FlaUI.Core.AutomationElements;
-    using FlaUI.Core.Conditions;
-    using FlaUI.Core.Definitions;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Runtime.InteropServices;
+using FlaUI.Core;
+using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Conditions;
+using FlaUI.Core.Definitions;
+using FlaUI.Core.Patterns;
     
 
 
-    // The DTO record remains the same
+// The DTO record remains the same
 public record DesktopScrapedElementDto(
     string DbId,
     string? Name,
@@ -110,89 +111,123 @@ public record DesktopScrapedElementDto(
             }
         }
 
-        // ===================================================================
-        // RULE PROVIDER ARCHITECTURE
-        // ===================================================================
+    // ===================================================================
+    // RULE PROVIDER ARCHITECTURE
+    // ===================================================================
 
-         // ===================================================================
-        //  Semantic Rules
-        // ===================================================================
+    // ===================================================================
+    //  Semantic Rules
+    // ===================================================================
+        
+    public record EditorHelpDetails(string ErrorMessage);
 
-        public interface ISemanticRuleProvider
+    public interface ISemanticRuleProvider
+    {
+        List<SemanticRule> GetRules(TreeNode windowNode);
+        EditorHelpDetails GetEditorHelpDetails();
+    }
+
+    public class FileExplorerRuleProvider : ISemanticRuleProvider
+    {
+        public List<SemanticRule> GetRules(TreeNode windowNode)
         {
-            List<SemanticRule> GetRules(TreeNode windowNode);
-        }
+            var rules = new List<SemanticRule>();
+            var landmarkGroups = windowNode.FindAllNodesInTree(node => HasMeaningfulLandmark(node))
+                .GroupBy(node => node.Data.LandmarkType!);
 
-        public class FileExplorerRuleProvider : ISemanticRuleProvider
-        {
-            public List<SemanticRule> GetRules(TreeNode windowNode)
+            foreach (var group in landmarkGroups)
             {
-                var rules = new List<SemanticRule>();
-                var landmarkGroups = windowNode.FindAllNodesInTree(node => HasMeaningfulLandmark(node))
-                    .GroupBy(node => node.Data.LandmarkType!);
+                string componentName = group.Key.Equals("Navigation", StringComparison.OrdinalIgnoreCase)
+                    ? "Address Bar (Breadcrumb)"
+                    : $"{char.ToUpper(group.Key[0])}{group.Key.Substring(1)}";
+                rules.Add(new SemanticRule(componentName, node => group.Contains(node), 93));
+            }
 
-                foreach (var group in landmarkGroups)
-                {
-                    string componentName = group.Key.Equals("Navigation", StringComparison.OrdinalIgnoreCase)
-                        ? "Address Bar (Breadcrumb)"
-                        : $"{char.ToUpper(group.Key[0])}{group.Key.Substring(1)} Landmark";
-                    rules.Add(new SemanticRule(componentName, node => group.Contains(node), 10));
-                }
+            // ### CHANGE 1: Find all potential address dropdowns first.
+            var addressInputCandidates = windowNode.FindAllNodesInTree(node =>
+                node.Data.ControlType == "List" &&
+                string.IsNullOrEmpty(node.Data.Name) &&
+                node.FindNodeInTree(n => n.Data.ControlType == "TabItem") == null);
+            
+            // And select only the first one to be the primary.
+            var primaryAddressInput = addressInputCandidates.FirstOrDefault();
 
-                rules.AddRange(new[]
-                {
+            rules.AddRange(new[]
+            {
                     //static
                     new SemanticRule("Title Bar", node => node.Data.ControlType == "TitleBar", 100, "Static"),
+                    new SemanticRule("Navigation Toolbar", node => node.Data.ControlType == "AppBar" && node.FindNodeInTree(n => n.Data.Name == "Back") != null, 95, "Static"),
                     new SemanticRule("Address Bar (Root Item)", node => node.Data.ClassName == "FileExplorerExtensions.FirstCrumbStackPanelControl", 91, "Static"),
                     new SemanticRule("Command Bar", node => node.Data.ControlType == "AppBar" && node.FindNodeInTree(n => n.Data.Name == "Cut" || n.Data.Name == "View") != null, 85, "Static"),
-                    new SemanticRule("Navigation Toolbar", node => node.Data.ControlType == "AppBar" && node.FindNodeInTree(n => n.Data.Name == "Back") != null, 84, "Static"),
-                    new SemanticRule("Status Bar", node => node.Data.ControlType == "StatusBar", 80, "Static"),
                     new SemanticRule("Details Bar", node => node.Data.ControlType == "AppBar" && node.FindNodeInTree(n => n.Data.Name == "Details") != null, 83, "Static"),
+                    new SemanticRule("Status Bar", node => node.Data.ControlType == "StatusBar", 80, "Static"),
                     //variable
                     new SemanticRule("Tab Bar", node => node.Data.ClassName == "Microsoft.UI.Xaml.Controls.TabView", 95, "Variable"),
-                    new SemanticRule("Address Bar (Input)", node => node.Data.ClassName == "AutoSuggestBox", 90, "Variable"),
+                    new SemanticRule("Address Bar (Text Input)", node => node.Data.ControlType == "Edit" && node.Data.Name == "Address Bar", 90, "Variable"),
+            
+                    // ### CHANGE 2: The rule now only matches the specific node we pre-selected.
+                    new SemanticRule("Address Bar (Input)", node => node == primaryAddressInput, 89, "Variable"),
                     new SemanticRule("Navigation Pane", node => node.Data.Name == "Navigation Pane" && node.Data.ControlType == "Tree", 50, "Variable"),
                     new SemanticRule("Main Content", node => node.Data.Name == "Items View" && node.Data.ControlType == "List", 49, "Variable")
                 });
 
-                return rules.OrderByDescending(r => r.Priority).ToList();
-            }
+            return rules.OrderByDescending(r => r.Priority).ToList();
 
-            private bool HasMeaningfulLandmark(TreeNode node)
-            {
-                var landmarkType = node.Data.LandmarkType;
-                return !string.IsNullOrEmpty(landmarkType) && !landmarkType.Equals("None", StringComparison.OrdinalIgnoreCase) && landmarkType != "0";
-            }
         }
-        public class VSCodeRuleProvider : ISemanticRuleProvider
+
+        private bool HasMeaningfulLandmark(TreeNode node)
         {
-            public List<SemanticRule> GetRules(TreeNode windowNode)
+            var landmarkType = node.Data.LandmarkType;
+            return !string.IsNullOrEmpty(landmarkType) && !landmarkType.Equals("None", StringComparison.OrdinalIgnoreCase) && landmarkType != "0";
+        }
+            
+        public EditorHelpDetails GetEditorHelpDetails()
+        {
+            return new EditorHelpDetails(
+                ErrorMessage: string.Empty
+            );
+        }
+        }
+    public class VSCodeRuleProvider : ISemanticRuleProvider
+    {
+        public List<SemanticRule> GetRules(TreeNode windowNode)
+        {
+            var rules = new List<SemanticRule>();
+
+            rules.AddRange(new[]
             {
-                var rules = new List<SemanticRule>();
-                rules.AddRange(new[]
-                {
                     //static
                     new SemanticRule("Window Controls", n => n.Data.ControlType == "Button" && (n.Data.Name == "Minimize" || n.Data.Name == "Restore" || n.Data.Name == "Close"), 100, "Static"),
                     new SemanticRule("Menu Bar", n => n.Data.ControlType == "MenuBar" && n.FindNodeInTree(c => c.Data.Name == "File") != null, 95, "Static"),
                     new SemanticRule("Main Toolbar", n => n.Data.ControlType == "ToolBar" && n.FindNodeInTree(c => c.Data.Name != null && c.Data.Name.StartsWith("Go Back")) != null, 90, "Static"),
                     new SemanticRule("Layout Controls", n => n.Data.Name == "Title actions" && n.Data.ControlType == "ToolBar", 88, "Static"),
-                    new SemanticRule("Status Bar", n => n.Data.ControlType == "StatusBar", 50, "Static"),
-                    new SemanticRule("Editor Actions", n => n.Data.Name == "Editor actions" && n.Data.ControlType == "ToolBar", 72, "Static"),
+                    new SemanticRule("Activity Bar", n => n.Data.Name == "Active View Switcher" && n.Data.ControlType == "Tab" && n.FindNodeInTree(c => c.Data.Name != null && c.Data.Name.Contains("Explorer (Ctrl+Shift+E)")) != null, 85, "Static"),
                     new SemanticRule("Account & Settings Bar", n => n.Data.ControlType == "ToolBar" && n.FindNodeInTree(c => c.Data.Name == "Accounts" || c.Data.Name == "Manage") != null, 84, "Static"),
+                    new SemanticRule("Editor Actions", n => n.Data.Name == "Editor actions" && n.Data.ControlType == "ToolBar", 72, "Static"),
+                    new SemanticRule("Status Bar", n => n.Data.ControlType == "StatusBar", 50, "Static"),
                     //variable
-                    new SemanticRule("Side Bar", n => n.Data.ControlType == "Tree" && n.Data.Name == "Files Explorer", 80, "Variable"),
-                    new SemanticRule("Activity Bar", n => n.Data.Name == "Active View Switcher" && n.Data.ControlType == "Tab", 85, "Variable"),
+                    new SemanticRule("Side Bar", n => n.Data.ControlType == "Group" && n.Children.Any(c => c.Data.ControlType == "ToolBar" && c.Data.Name != null && c.Data.Name.EndsWith("actions")) && n.FindNodeInTree(c => c.Data.ControlType == "Tree" || c.Data.ControlType == "List") != null, 80, "Variable"),
+                    //new SemanticRule("Side Bar", n => n.Data.ControlType == "Tree" && n.Data.Name == "Files Explorer", 80, "Variable"),
                     new SemanticRule("Editor Tabs", n => n.Data.ControlType == "Tab" && n.FindNodeInTree(c => c.Data.ControlType == "TabItem") != null && n.FindNodeInTree(c => c.Data.Name == "Active View Switcher") == null, 71, "Variable"),
-                    new SemanticRule("Editor Group", n => n.Data.ControlType == "Edit" && n.Parent != null  && n.Parent.Data.LandmarkType != null && n.Parent.Data.LandmarkType.StartsWith("Main") && (n.Data.BoundingRectangle.Width * n.Data.BoundingRectangle.Height > 40000), 70, "Variable"),
-                    new SemanticRule("Editor Group", n => n.Data.ControlType == "List" && n.Parent != null && n.Parent.Data.LandmarkType != null &&n.Parent.Data.LandmarkType.StartsWith("Main") &&n.FindNodeInTree(c => c.Data.ControlType == "ListItem") != null,68, "Variable"),
-                    new SemanticRule("Editor Group", n =>n.Data.Name == "Find / Replace",65, "Variable"),
-                    // new SemanticRule("Editor Group", n => n.Data.LandmarkType != null && n.Data.LandmarkType.StartsWith("Main") && n.Data.ControlType != "ToolBar" &&n.Data.ControlType != "Tab", 70, "Variable"),
-                    new SemanticRule("Panel", n => n.Data.Name == "Panel" && n.Data.ControlType == "Pane", 60, "Variable"),
+                    new SemanticRule("Editor Group", n => n.Data.LandmarkType != null && n.Data.LandmarkType.StartsWith("Main") && n.Data.ControlType != "ToolBar" &&n.Data.ControlType != "Tab", 70, "Variable"),
+                    new SemanticRule("Panel", n =>n.Data.ControlType == "Group" && n.FindNodeInTree(c => c.Data.Name != null && c.Data.Name.StartsWith("Problems (")) != null && n.FindNodeInTree(c => c.Data.Name == "Maximize Panel Size") != null && n.FindNodeInTree(c => c.Data.LandmarkType != null && c.Data.LandmarkType.StartsWith("Main")) == null, 60, "Variable"),
+                    // new SemanticRule("Panel", n => n.Data.Name == "Panel" && n.Data.ControlType == "Pane", 60, "Variable"),
                     new SemanticRule("Notifications", n => n.Data.ControlType == "List" && n.Data.Name != null && n.Data.Name.Contains("notification"), 40, "Variable")
                 });
-                return rules.OrderByDescending(r => r.Priority).ToList();
-            }
+            return rules.OrderByDescending(r => r.Priority).ToList();
         }
+
+        public EditorHelpDetails GetEditorHelpDetails()
+        {
+            return new EditorHelpDetails(
+                ErrorMessage: "Could not find an editor pane that supports text extraction via UI Automation.\n" +
+                            "FIX: Ensure accessibility support is enabled in VS Code. Press Shift+Alt+F1 for help or add the following to your settings.json file:\n" +
+                            "\"editor.accessibilitySupport\": \"on\""
+            );
+        }
+            
+            
+    }
 
     public class DefaultRuleProvider : ISemanticRuleProvider
     {
@@ -201,6 +236,14 @@ public record DesktopScrapedElementDto(
             // In DefaultRuleProvider.GetRules method
             return new List<SemanticRule> { new SemanticRule("Title Bar", node => node.Data.ControlType == "TitleBar", 100, "Static") };
         }
+
+        public EditorHelpDetails GetEditorHelpDetails()
+        {
+            return new EditorHelpDetails(
+                ErrorMessage: "Could not find an editor pane that supports text extraction."
+            );
+        }
+
     }
 
         public class SemanticRuleFactory
@@ -283,6 +326,7 @@ public record DesktopScrapedElementDto(
         // MAIN SCRAPER CLASS
         // ===================================================================
 
+
         public class TopWindowScraper
         {
             private class DiscoveredNode
@@ -296,6 +340,10 @@ public record DesktopScrapedElementDto(
             private readonly AutomationBase _automation;
             private int _nextId = 0;
             private readonly SemanticRuleFactory _ruleFactory = new();
+
+            private List<SemanticRule> _rules = new List<SemanticRule>();
+            
+            private EditorHelpDetails _editorHelp = new("");
 
             public TopWindowScraper(AutomationBase automation)
             {
@@ -316,19 +364,50 @@ public record DesktopScrapedElementDto(
                 var windowElement = GetElementById(flatList[0].DbId);
                 if (windowElement == null) return new List<SemanticViewComponent>();
                 var ruleProvider = _ruleFactory.GetProvider(windowElement);
+                _editorHelp = ruleProvider.GetEditorHelpDetails();
                 var rawTree = BuildTree(flatList);
                 return BuildSemanticViewHeuristically(rawTree, ruleProvider);
             }
-
+            
             private List<SemanticViewComponent> BuildSemanticViewHeuristically(List<TreeNode> rawTree, ISemanticRuleProvider ruleProvider)
             {
                 if (rawTree.Count == 0) return new List<SemanticViewComponent>();
+
                 var windowNode = rawTree[0];
-                var rules = ruleProvider.GetRules(windowNode);
-                var classifiedRootsMap = ClassifyNodes(windowNode, rules);
-                var semanticView = BuildComponentsFromClassification(classifiedRootsMap);
+                _rules = ruleProvider.GetRules(windowNode);
+
+                // 1. CLASSIFY: This step correctly identifies the root node for each potential component.
+                var classifiedRootsMap = ClassifyNodes(windowNode, _rules);
+                var initialComponents = BuildComponentsFromClassification(classifiedRootsMap);
+
+                // 2. PRUNE: We now prune the trees to prevent content duplication.
+                var allComponentRoots = new HashSet<TreeNode>(classifiedRootsMap.Keys);
+                var finalComponents = new List<SemanticViewComponent>();
+
+                foreach (var component in initialComponents)
+                {
+                    var prunedComponentRoots = new List<TreeNode>();
+                    foreach (var rootNode in component.RootNodes)
+                    {
+                        var rootsToPrune = new HashSet<TreeNode>(allComponentRoots);
+                        rootsToPrune.ExceptWith(component.RootNodes);
+                        
+                        var prunedTree = PruneClaimedRootsRecursive(rootNode, rootNode.Parent, rootsToPrune);
+                        if (prunedTree != null)
+                        {
+                            prunedComponentRoots.Add(prunedTree);
+                        }
+                    }
+
+                    if (prunedComponentRoots.Any())
+                    {
+                        finalComponents.Add(new SemanticViewComponent(component.ComponentName, component.ComponentType, prunedComponentRoots));
+                    }
+                }
+
+                // 3. HANDLE UNCLAIMED: Find what's left over for "Other Controls".
                 var allClaimedSignatures = new HashSet<string>();
-                foreach (var component in semanticView)
+                foreach (var component in initialComponents)
                 {
                     foreach (var rootNode in component.RootNodes)
                     {
@@ -339,67 +418,122 @@ public record DesktopScrapedElementDto(
                         }
                     }
                 }
-                var unclaimedTopLevelNodes = windowNode.Children.Where(child => !allClaimedSignatures.Contains(GetNodeSignature(child))).ToList();
-                var prunedOtherNodes = new List<TreeNode>();
-                foreach (var node in unclaimedTopLevelNodes)
+
+                var unclaimedTopLevelNodes = windowNode.Children
+                    .Where(child => !allClaimedSignatures.Contains(GetNodeSignature(child)))
+                    .ToList();
+
+                // ===================================================================
+                // START OF THE FIX
+                // ===================================================================
+                if (unclaimedTopLevelNodes.Any())
                 {
-                    var prunedNode = PruneClaimedNodes(node, allClaimedSignatures);
-                    if (prunedNode != null)
+                    var prunedOtherNodes = new List<TreeNode>();
+                    // We must also prune the "Other" nodes to remove any claimed sub-trees.
+                    // The set of roots to prune is ALL component roots.
+                    var allRootsToPrune = new HashSet<TreeNode>(classifiedRootsMap.Keys);
+
+                    foreach (var unclaimedNode in unclaimedTopLevelNodes)
                     {
-                        prunedOtherNodes.Add(prunedNode);
+                        var prunedNode = PruneClaimedRootsRecursive(unclaimedNode, unclaimedNode.Parent, allRootsToPrune);
+                        if (prunedNode != null)
+                        {
+                            prunedOtherNodes.Add(prunedNode);
+                        }
+                    }
+
+                    if (prunedOtherNodes.Any())
+                    {
+                        finalComponents.Add(new SemanticViewComponent("Other Controls", "Variable", prunedOtherNodes));
                     }
                 }
-                if (prunedOtherNodes.Any())
-                {
-                    // The "Other Controls" are considered variable
-                    semanticView.Add(new SemanticViewComponent("Other Controls", "Variable", prunedOtherNodes));
-                }
-                return semanticView;
+                // ===================================================================
+                // END OF THE FIX
+                // ===================================================================
+
+                return finalComponents;
             }
 
-            public List<DesktopScrapedElementDto>? PerformSafeScrape()
+            // private List<SemanticViewComponent> BuildSemanticViewHeuristically(List<TreeNode> rawTree, ISemanticRuleProvider ruleProvider)
+        // {
+        //     if (rawTree.Count == 0) return new List<SemanticViewComponent>();
+        //     var windowNode = rawTree[0];
+        //     var rules = ruleProvider.GetRules(windowNode);
+        //     var classifiedRootsMap = ClassifyNodes(windowNode, rules);
+        //     var semanticView = BuildComponentsFromClassification(classifiedRootsMap);
+        //     var allClaimedSignatures = new HashSet<string>();
+        //     foreach (var component in semanticView)
+        //     {
+        //         foreach (var rootNode in component.RootNodes)
+        //         {
+        //             var nodesInComponent = rootNode.FindAllNodesInTree(_ => true);
+        //             foreach (var node in nodesInComponent)
+        //             {
+        //                 allClaimedSignatures.Add(GetNodeSignature(node));
+        //             }
+        //         }
+        //     }
+        //     var unclaimedTopLevelNodes = windowNode.Children.Where(child => !allClaimedSignatures.Contains(GetNodeSignature(child))).ToList();
+        //     var prunedOtherNodes = new List<TreeNode>();
+        //     foreach (var node in unclaimedTopLevelNodes)
+        //     {
+        //         var prunedNode = PruneClaimedNodes(node, allClaimedSignatures);
+        //         if (prunedNode != null)
+        //         {
+        //             prunedOtherNodes.Add(prunedNode);
+        //         }
+        //     }
+        //     if (prunedOtherNodes.Any())
+        //     {
+        //         // The "Other Controls" are considered variable
+        //         semanticView.Add(new SemanticViewComponent("Other Controls", "Variable", prunedOtherNodes));
+        //     }
+        //     return semanticView;
+        // }
+
+        public List<DesktopScrapedElementDto>? PerformSafeScrape()
+        {
+            // 1. BOOKEND START: Get the unique ID (handle) of the foreground window.
+            IntPtr handleBefore = NativeMethods.GetForegroundWindow();
+            if (handleBefore == IntPtr.Zero)
             {
-                // 1. BOOKEND START: Get the unique ID (handle) of the foreground window.
-                IntPtr handleBefore = NativeMethods.GetForegroundWindow();
-                if (handleBefore == IntPtr.Zero)
-                {
-                    Console.WriteLine("VALIDATION FAILED: No foreground window could be identified before scraping.");
-                    return null;
-                }
-
-                // 2. PERFORM THE SCRAPE
-                List<DesktopScrapedElementDto> scrapedData;
-                try
-                {
-                    // Call the original, internal scrape method.
-                    scrapedData = Scrape(); 
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"VALIDATION FAILED: Scrape was interrupted by an internal error: {ex.Message}");
-                    return null;
-                }
-
-                // 3. BOOKEND END: Get the foreground window handle again.
-                IntPtr handleAfter = NativeMethods.GetForegroundWindow();
-
-                // 4. VALIDATE: Compare the handles.
-                if (handleBefore != handleAfter)
-                {
-                    Console.WriteLine("VALIDATION FAILED: Window focus changed during the scrape. The data is considered unreliable.");
-                    return null;
-                }
-                
-                // Optional sanity check
-                if (scrapedData == null || !scrapedData.Any())
-                {
-                    Console.WriteLine("VALIDATION FAILED: Scrape completed but returned no elements.");
-                    return null;
-                }
-
-                // If all checks pass, return the trusted data.
-                return scrapedData;
+                Console.WriteLine("VALIDATION FAILED: No foreground window could be identified before scraping.");
+                return null;
             }
+
+            // 2. PERFORM THE SCRAPE
+            List<DesktopScrapedElementDto> scrapedData;
+            try
+            {
+                // Call the original, internal scrape method.
+                scrapedData = Scrape();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"VALIDATION FAILED: Scrape was interrupted by an internal error: {ex.Message}");
+                return null;
+            }
+
+            // 3. BOOKEND END: Get the foreground window handle again.
+            IntPtr handleAfter = NativeMethods.GetForegroundWindow();
+
+            // 4. VALIDATE: Compare the handles.
+            if (handleBefore != handleAfter)
+            {
+                Console.WriteLine("VALIDATION FAILED: Window focus changed during the scrape. The data is considered unreliable.");
+                return null;
+            }
+
+            // Optional sanity check
+            if (scrapedData == null || !scrapedData.Any())
+            {
+                Console.WriteLine("VALIDATION FAILED: Scrape completed but returned no elements.");
+                return null;
+            }
+
+            // If all checks pass, return the trusted data.
+            return scrapedData;
+        }
 
 
             public List<DesktopScrapedElementDto> Scrape()
@@ -447,41 +581,40 @@ public record DesktopScrapedElementDto(
                 return finalResults;
             }
             
-
-
             public void PrintSemanticView(List<SemanticViewComponent> semanticView)
+        {
+            Console.WriteLine("\n--- Semantic Window Summary ---");
+
+            var priorityLookup = _rules.ToDictionary(r => r.ComponentName, r => r.Priority);
+
+
+            var staticComponents = semanticView.Where(c => c.ComponentType == "Static").ToList();
+            var variableComponents = semanticView.Where(c => c.ComponentType == "Variable").ToList();
+
+            // Print Static Components
+            if (staticComponents.Any())
             {
-                Console.WriteLine("\n--- Semantic Window Summary ---");
-
-                var staticComponents = semanticView.Where(c => c.ComponentType == "Static").ToList();
-                var variableComponents = semanticView.Where(c => c.ComponentType == "Variable").ToList();
-
-                // Print Static Components
-                if (staticComponents.Any())
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("\n\n--- Static Components ---");
+                Console.ResetColor();
+                foreach (var component in staticComponents.OrderByDescending(c => priorityLookup.GetValueOrDefault(c.ComponentName, 0)))
                 {
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine("\n\n--- Static Components ---");
-                    Console.ResetColor();
-                    foreach (var component in staticComponents)
-                    {
-                        // MERGED: Pass the element cache to the details method.
-                        PrintComponentDetails(component, _elementCache);
-                    }
-                }
-
-                // Print Variable Components
-                if (variableComponents.Any())
-                {
-                    Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.WriteLine("\n\n--- Variable Components ---");
-                    Console.ResetColor();
-                    foreach (var component in variableComponents)
-                    {
-                        // MERGED: Pass the element cache to the details method.
-                        PrintComponentDetails(component, _elementCache);
-                    }
+                    PrintComponentDetails(component, _elementCache);
                 }
             }
+
+            // Print Variable Components
+            if (variableComponents.Any())
+            {
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine("\n\n--- Variable Components ---");
+                Console.ResetColor();
+                foreach (var component in variableComponents.OrderByDescending(c => priorityLookup.GetValueOrDefault(c.ComponentName, 0)))
+                {
+                    PrintComponentDetails(component, _elementCache);
+                }
+            }
+        }
 
 
         private void PrintComponentDetails(SemanticViewComponent component, Dictionary<string, AutomationElement> elementCache)
@@ -517,7 +650,6 @@ public record DesktopScrapedElementDto(
             // This logic runs only for the "Editor Group" component, after its other elements (if any) are printed.
             if (component.ComponentName == "Editor Group")
             {
-                // 1. Find ALL potential editor nodes with a broad filter.
                 var potentialEditorNodes = component.RootNodes
                     .SelectMany(root => root.FindAllNodesInTree(n =>
                         n.Data.ControlType == "Edit" &&
@@ -526,31 +658,45 @@ public record DesktopScrapedElementDto(
 
                 bool editorFoundAndPrinted = false;
 
-                // 2. Loop through the potential nodes to find the right one.
                 foreach (var editorNode in potentialEditorNodes)
                 {
-                    // 3. Check if the element supports the TextPattern.
                     if (elementCache.TryGetValue(editorNode.Data.DbId, out var editorElement) &&
                         editorElement.Patterns.Text.IsSupported)
                     {
-                        // 4. We found the correct element! Print its content.
+                        // CHANGED: Get the text *before* deciding it's a success.
                         var textPattern = editorElement.Patterns.Text.Pattern;
-                        Console.ForegroundColor = ConsoleColor.DarkGray;
-                        Console.WriteLine("--- Contained Code (via TextPattern) ---");
-                        Console.ResetColor();
-                        Console.WriteLine(textPattern.DocumentRange.GetText(-1).Trim());
+                        string extractedText = textPattern.DocumentRange.GetText(-1).Trim();
 
-                        editorFoundAndPrinted = true;
-                        break; // Stop searching since we found and printed the code.
+                        // NEW CHECK: Only proceed if we actually extracted some content.
+                        if (!string.IsNullOrEmpty(extractedText))
+                        {
+                            // --- Successful Extraction Block ---
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.WriteLine("--- Contained Code (via TextPattern) ---");
+                            Console.ResetColor();
+                            Console.WriteLine();
+                            Console.ForegroundColor = ConsoleColor.DarkYellow;
+                            Console.WriteLine("Note: For performance reasons, code extraction is limited to the first ~500 lines of a file.");
+                            Console.ResetColor();
+
+                            Console.WriteLine(extractedText);
+                             editorFoundAndPrinted = true;
+                            break; 
+                        }
+                        // If extractedText is empty, we do nothing and let the loop continue.
                     }
                 }
 
                 if (!editorFoundAndPrinted)
                 {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine("\n--- Code Extraction Failed ---");
-                    Console.WriteLine("Could not find an editor pane that supports TextPattern. VS Code accessibility support might be off (set \"editor.accessibilitySupport\": \"on\").");
-                    Console.ResetColor();
+                    // This block will now be correctly triggered if the placeholder returns empty text.
+                    if (!string.IsNullOrEmpty(_editorHelp.ErrorMessage))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("\n--- Code Extraction Failed ---");
+                        Console.WriteLine(_editorHelp.ErrorMessage);
+                        Console.ResetColor();
+                    }
                 }
             }
         }
@@ -709,66 +855,139 @@ public record DesktopScrapedElementDto(
                 return newNode;
             }
             
-            private Dictionary<TreeNode, SemanticRule> ClassifyNodes(TreeNode root, List<SemanticRule> rules)
+            private TreeNode? PruneClaimedRootsRecursive(TreeNode originalNode, TreeNode? parent, HashSet<TreeNode> allClaimedRoots)
             {
-                var classifiedRoots = new Dictionary<TreeNode, SemanticRule>();
-                var claimedNodes = new HashSet<TreeNode>();
-                var queue = new Queue<TreeNode>();
-                queue.Enqueue(root);
-                while (queue.Count > 0)
+                // If this node is the root of another component, prune this entire branch.
+                if (allClaimedRoots.Contains(originalNode))
                 {
-                    var currentNode = queue.Dequeue();
-                    if (claimedNodes.Contains(currentNode)) continue;
-                    var matchingRule = rules.FirstOrDefault(rule => rule.Predicate(currentNode));
-                    if (matchingRule != null)
+                    return null;
+                }
+
+                // Create a new node to avoid modifying the original tree.
+                var newNode = new TreeNode(originalNode.Data)
+                {
+                    Parent = parent
+                };
+
+                // Recursively process and prune children.
+                foreach (var child in originalNode.Children)
+                {
+                    // For the recursive call, we must check against the full set of claimed roots.
+                    var prunedChild = PruneClaimedRootsRecursive(child, newNode, allClaimedRoots);
+                    if (prunedChild != null)
                     {
-                        classifiedRoots[currentNode] = matchingRule;
-                        foreach (var nodeToClaim in currentNode.FindAllNodesInTree(_ => true))
-                        {
-                            claimedNodes.Add(nodeToClaim);
-                        }
-                    }
-                    else
-                    {
-                        foreach (var child in currentNode.Children)
-                        {
-                            queue.Enqueue(child);
-                        }
+                        newNode.Children.Add(prunedChild);
                     }
                 }
-                return classifiedRoots;
+
+                return newNode;
             }
             
-            private List<SemanticViewComponent> BuildComponentsFromClassification(Dictionary<TreeNode, SemanticRule> classifiedRoots)
-            {
-                return classifiedRoots
-                    .GroupBy(kvp => kvp.Value.ComponentName) // <--- GROUP BY THE NAME STRING
-                    .Select(group => 
-                    {
-                        // The 'group.Key' is now the string ComponentName (e.g., "Editor Group").
-                        // We get the ComponentType from the first rule in the group.
-                        var representativeRule = group.First().Value;
-                        var componentType = representativeRule.ComponentType;
+            private Dictionary<TreeNode, SemanticRule> ClassifyNodes(TreeNode root, List<SemanticRule> rules)
+        {
+            // Pass 1: Identification
+            // Find the best rule for every single node in the tree.
+            var nodeToBestRuleMap = new Dictionary<TreeNode, SemanticRule>();
+            var queue = new Queue<TreeNode>();
+            queue.Enqueue(root);
 
-                        // Collect ALL root nodes from ALL rules in this group.
-                        var allRootNodes = group.Select(kvp => kvp.Key).ToList();
-                        
-                        return new SemanticViewComponent(group.Key, componentType, allRootNodes);
-                    })
-                    .ToList();
+            while (queue.Count > 0)
+            {
+                var currentNode = queue.Dequeue();
+
+                // Find the highest-priority rule that matches this specific node.
+                var matchingRule = rules.FirstOrDefault(rule => rule.Predicate(currentNode));
+                if (matchingRule != null)
+                {
+                    nodeToBestRuleMap[currentNode] = matchingRule;
+                }
+
+                foreach (var child in currentNode.Children)
+                {
+                    queue.Enqueue(child);
+                }
             }
+
+            // Pass 2: Root-Finding
+            // From the identified nodes, determine the true roots of each component.
+            var classifiedRoots = new Dictionary<TreeNode, SemanticRule>();
+            foreach (var (node, rule) in nodeToBestRuleMap)
+            {
+                // A node is a root if its parent is NOT classified under the SAME rule.
+                // This allows high-priority children to "carve out" from low-priority parents.
+                bool isRoot = node.Parent == null ||
+                            !nodeToBestRuleMap.TryGetValue(node.Parent, out var parentRule) ||
+                            parentRule != rule;
+
+                if (isRoot)
+                {
+                    classifiedRoots[node] = rule;
+                }
+            }
+
+            return classifiedRoots;
+        }
+            
+            // private Dictionary<TreeNode, SemanticRule> ClassifyNodes(TreeNode root, List<SemanticRule> rules)
+        // {
+        //     var classifiedRoots = new Dictionary<TreeNode, SemanticRule>();
+        //     var claimedNodes = new HashSet<TreeNode>();
+        //     var queue = new Queue<TreeNode>();
+        //     queue.Enqueue(root);
+        //     while (queue.Count > 0)
+        //     {
+        //         var currentNode = queue.Dequeue();
+        //         if (claimedNodes.Contains(currentNode)) continue;
+        //         var matchingRule = rules.FirstOrDefault(rule => rule.Predicate(currentNode));
+        //         if (matchingRule != null)
+        //         {
+        //             classifiedRoots[currentNode] = matchingRule;
+        //             foreach (var nodeToClaim in currentNode.FindAllNodesInTree(_ => true))
+        //             {
+        //                 claimedNodes.Add(nodeToClaim);
+        //             }
+        //         }
+        //         else
+        //         {
+        //             foreach (var child in currentNode.Children)
+        //             {
+        //                 queue.Enqueue(child);
+        //             }
+        //         }
+        //     }
+        //     return classifiedRoots;
+        // }
 
         // private List<SemanticViewComponent> BuildComponentsFromClassification(Dictionary<TreeNode, SemanticRule> classifiedRoots)
         // {
         //     return classifiedRoots
-        //         .GroupBy(kvp => kvp.Value)
-        //         .Select(group => new SemanticViewComponent(
-        //             group.Key.ComponentName,
-        //             group.Key.ComponentType,
-        //             group.Select(kvp => kvp.Key).ToList()
-        //         ))
+        //         .GroupBy(kvp => kvp.Value.ComponentName) // <--- GROUP BY THE NAME STRING
+        //         .Select(group => 
+        //         {
+        //             // The 'group.Key' is now the string ComponentName (e.g., "Editor Group").
+        //             // We get the ComponentType from the first rule in the group.
+        //             var representativeRule = group.First().Value;
+        //             var componentType = representativeRule.ComponentType;
+
+        //             // Collect ALL root nodes from ALL rules in this group.
+        //             var allRootNodes = group.Select(kvp => kvp.Key).ToList();
+
+        //             return new SemanticViewComponent(group.Key, componentType, allRootNodes);
+        //         })
         //         .ToList();
         // }
+
+        private List<SemanticViewComponent> BuildComponentsFromClassification(Dictionary<TreeNode, SemanticRule> classifiedRoots)
+        {
+            return classifiedRoots
+                .GroupBy(kvp => kvp.Value)
+                .Select(group => new SemanticViewComponent(
+                    group.Key.ComponentName,
+                    group.Key.ComponentType,
+                    group.Select(kvp => kvp.Key).ToList()
+                ))
+                .ToList();
+        }
 
         public static List<TreeNode> BuildTree(List<DesktopScrapedElementDto> flatList)
         {

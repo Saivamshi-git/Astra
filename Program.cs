@@ -43,7 +43,7 @@ namespace DesktopElementInspector
                             // result = topWindowScraper.Scrape();
                             var DscrapedElements = topWindowScraper.AnalyzeSemantically();
                             // var res = topWindowScraper.Scrape();
-                            // res.ForEach(item => Console.WriteLine(item));
+                            //res.ForEach(item => Console.WriteLine(item));
 
                             // Use string.Join and a LINQ Select to format each element's data.
                             // topWindowScraper.PrintTree(DscrapedElements);
@@ -69,7 +69,7 @@ namespace DesktopElementInspector
                             Console.WriteLine("=======================================================================");
                             break;
                         case "3":
-                            // To run the taskbar test, just make this single method call:
+                              // To run the taskbar test, just make this single method call:
                             TaskbarTestExecutor.RunInteractiveTest();
 
                             Console.WriteLine("The taskbar test has completed. Resuming main application flow.");
